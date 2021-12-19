@@ -1,0 +1,18 @@
+[package]
+name = "bdc"
+version = "0.1.0"
+edition = "2018"
+publish = false
+
+[dependencies]
+aya = { git = "https://github.com/aya-rs/aya", branch="main", features = ["async_tokio"] }
+bdc-common = { path = "../bdc-common", features=["user"] }
+anyhow = "1.0.42"
+ctrlc = "3.2"
+tokio = { version = "1.9.0", features = ["full"] }
+
+structopt = { version = "0.3"}
+
+[[bin]]
+name = "bdc"
+path = "src/main.rs"
