@@ -12,6 +12,7 @@ use aya::{
     },
     include_bytes_aligned,
     Bpf,
+    util::online_cpus,
 };
 use std::{
     convert::{TryFrom, TryInto},
@@ -26,14 +27,15 @@ use std::{
 };
 use structopt::StructOpt;
 use tokio::{signal, task};
+use anyhow::{Context, Error};
+use bytes::BytesMut;
+use bdc_common::{PacketLog, Ipv4Header};
 
-// #[tokio::main]
-// async fn main() {
-fn main() {
-    if let Err(e) = try_main() {
-        eprintln!("error: {:#}", e);
-    }
-}
+// fn main() {
+//     if let Err(e) = try_main() {
+//         eprintln!("error: {:#}", e);
+//     }
+// }
 
 #[derive(Debug, StructOpt)]
 struct Opt {
@@ -43,7 +45,9 @@ struct Opt {
     bpftype: String,
 }
 
-fn try_main() -> Result<(), anyhow::Error> {
+#[tokio::main]
+// fn try_main() -> Result<(), anyhow::Error> {
+async fn main() -> Result<(), anyhow::Error> {
     let opt = Opt::from_args();
     // This will include youe eBPF object file as raw bytes at compile-time and load it at
     // runtime. This approach is recommended for most real-world use cases. If you would
@@ -65,24 +69,53 @@ fn try_main() -> Result<(), anyhow::Error> {
 
         let mut blocklist: HashMap<_, u32, u32> = HashMap::try_from(bpf.map_mut("BLOCKLIST")?)?;
         let block_addr: u32 = Ipv4Addr::new(1, 1, 1, 1).try_into()?;
+        let block_addr1: u32 = Ipv4Addr::new(0, 0, 0, 0).try_into()?;
         blocklist.insert(block_addr, 0, 0)?;
+        blocklist.insert(block_addr1, 0, 0)?;
 
-        let running = Arc::new(AtomicBool::new(true));
-        let r = running.clone();
+        let mut perf_array = AsyncPerfEventArray::try_from(bpf.map_mut("BLOCKEVENTS")?)?;
 
-        ctrlc::set_handler(move || {
-            r.store(false, Ordering::SeqCst);
-        })
-        .expect("Error setting Ctrl-C handler");
+        for cpu_id in online_cpus()? {
+            let mut buf = perf_array.open(cpu_id, None)?;
+            task::spawn(async move {
+                let mut buffers = (0..10)
+                    .map(|_| BytesMut::with_capacity(1024))
+                    .collect::<Vec<_>>();
 
-        println!("Waiting for Ctrl-C...");
-        while running.load(Ordering::SeqCst) {
-            thread::sleep(Duration::from_millis(500))
+                loop {
+                    let events = buf.read_events(&mut buffers).await.unwrap();
+                    for i in 0..events.read {
+                        let buf = &mut buffers[i];
+                        let ptr = buf.as_ptr() as *const PacketLog;
+                        let data = unsafe { ptr.read_unaligned() };
+                        let src_addr = net::Ipv4Addr::from(data.ipv4_header.src_address);
+                        let dst_addr = net::Ipv4Addr::from(data.ipv4_header.dst_address);
+                        println!("LOG: BLOCKED SRC ADDR {}, DST ADDR {}, ACTION {}, TTL {}, PROTOCOL {}, CHECKSUM {}",
+                                src_addr, dst_addr, data.action, data.ipv4_header.ttl,
+                                data.ipv4_header.protocol, data.ipv4_header.checksum);
+                    }
+                }
+            });
         }
-        println!("Exiting...");
-
+        signal::ctrl_c().await.expect("failed to listen for event");
         Ok(())
+        // let running = Arc::new(AtomicBool::new(true));
+        // let r = running.clone();
+        //
+        // ctrlc::set_handler(move || {
+        //     r.store(false, Ordering::SeqCst);
+        // })
+        // .expect("Error setting Ctrl-C handler");
+        //
+        // println!("Waiting for Ctrl-C...");
+        // while running.load(Ordering::SeqCst) {
+        //     thread::sleep(Duration::from_millis(500))
+        // }
+        // println!("Exiting...");
+        //
+        // Ok(())
     } else {
+        // DEPLICATED CODE
         tc::qdisc_add_clsact(&opt.iface)?;
         let program: &mut SchedClassifier = bpf.program_mut("bdc").unwrap().try_into()?;
         program.load()?;

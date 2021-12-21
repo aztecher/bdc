@@ -21,13 +21,16 @@ use aya_bpf::{
     bindings::xdp_action,
 };
 
-// pub use bdc_common::PacketLog;
+pub use bdc_common::{PacketLog, Ipv4Header};
 
 const ETH_P_IP: u16 = 0x0800;
 const ETH_HDR_LEN: usize = mem::size_of::<ethhdr>();
 
 #[map(name = "BLOCKLIST")]
-static mut BLOCKLIST: HashMap<u32, u32> = HashMap::<u32,u32>::with_max_entries(1023, 0);
+static mut BLOCKLIST: HashMap<u32, u32> = HashMap::<u32,u32>::with_max_entries(1024, 0);
+
+#[map(name = "BLOCKEVENTS")]
+static mut BLOCKEVENTS: PerfEventArray<PacketLog> = PerfEventArray::<PacketLog>::with_max_entries(1024, 0);
 
 #[classifier(name="bdc")]
 pub fn bdc(ctx: SkBuffContext) -> i32 {
@@ -54,8 +57,8 @@ unsafe fn ptr_at<T>(ctx: &XdpContext, offset: usize) -> Result<*const T, ()> {
     Ok((start + offset) as *const T)
 }
 
-fn block_ip(address: u32) -> bool {
-    unsafe { BLOCKLIST.get(&address).is_some() }
+fn block_ip(address: &u32) -> bool {
+    unsafe { BLOCKLIST.get(address).is_some() }
 }
 
 #[xdp]
@@ -76,18 +79,61 @@ fn try_xdp_firewall(ctx: XdpContext) -> Result<u32, ()>{
     if h_proto != ETH_P_IP {
         return Ok(xdp_action::XDP_PASS);
     }
-    let source = u32::from_be(
+    let ip = to_ipv4_hdr(&ctx)?;
+    let action = if block_ip(&ip.src_address) {
+        let log_entry = PacketLog {
+            ipv4_header: ip,
+            action: xdp_action::XDP_DROP,
+        };
         unsafe {
-            *ptr_at(&ctx, ETH_HDR_LEN + offset_of!(iphdr, saddr))?
+            BLOCKEVENTS.output(&ctx, &log_entry, 0);
         }
-    );
-    let action = if block_ip(source) {
         xdp_action::XDP_DROP
     } else {
         xdp_action::XDP_PASS
     };
 
     Ok(action)
+}
+
+
+fn to_ipv4_hdr(ctx: &XdpContext) -> Result<Ipv4Header, ()> {
+    // MEMO: memoffset::offset_of is very useful but if you don't specify packed in repr(C, packed)
+    // then memory alignment is not suitable for this function and access error will be occurred.
+    // so, if you want to full struct of C structure, then you migit better to consider another
+    // implimemtation.
+    let total_length = u16::from_be(
+        unsafe { *ptr_at(&ctx, ETH_HDR_LEN + offset_of!(iphdr, tot_len))? }
+    );
+    let id = u16::from_be(
+        unsafe { *ptr_at(&ctx, ETH_HDR_LEN + offset_of!(iphdr, id))? }
+    );
+    let ttl = u8::from_be(
+        unsafe { *ptr_at(&ctx, ETH_HDR_LEN + offset_of!(iphdr, ttl))? }
+    );
+    let protocol = u8::from_be(
+        unsafe { *ptr_at(&ctx, ETH_HDR_LEN + offset_of!(iphdr, protocol))? }
+    );
+    let checksum = u16::from_be(
+        unsafe { *ptr_at(&ctx, ETH_HDR_LEN + offset_of!(iphdr, check))? }
+    );
+    let src_address = u32::from_be(
+        unsafe { *ptr_at(&ctx, ETH_HDR_LEN + offset_of!(iphdr, saddr))? }
+    );
+    let dst_address = u32::from_be(
+        unsafe { *ptr_at(&ctx, ETH_HDR_LEN + offset_of!(iphdr, daddr))? }
+    );
+    Ok(
+        Ipv4Header {
+            total_length,
+            id,
+            ttl,
+            protocol,
+            checksum,
+            src_address,
+            dst_address,
+        }
+    )
 }
 
 #[panic_handler]
