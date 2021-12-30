@@ -45,6 +45,7 @@ struct Opt {
     bpftype: String,
 }
 
+
 #[tokio::main]
 // fn try_main() -> Result<(), anyhow::Error> {
 async fn main() -> Result<(), anyhow::Error> {
@@ -69,7 +70,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
         let mut blocklist: HashMap<_, u32, u32> = HashMap::try_from(bpf.map_mut("BLOCKLIST")?)?;
         let block_addr: u32 = Ipv4Addr::new(1, 1, 1, 1).try_into()?;
-        let block_addr1: u32 = Ipv4Addr::new(0, 0, 0, 0).try_into()?;
+        let block_addr1: u32 = Ipv4Addr::new(172, 17, 42, 151).try_into()?;
         blocklist.insert(block_addr, 0, 0)?;
         blocklist.insert(block_addr1, 0, 0)?;
 
@@ -90,9 +91,13 @@ async fn main() -> Result<(), anyhow::Error> {
                         let data = unsafe { ptr.read_unaligned() };
                         let src_addr = net::Ipv4Addr::from(data.ipv4_header.src_address);
                         let dst_addr = net::Ipv4Addr::from(data.ipv4_header.dst_address);
-                        println!("LOG: BLOCKED SRC ADDR {}, DST ADDR {}, ACTION {}, TTL {}, PROTOCOL {}, CHECKSUM {}",
-                                src_addr, dst_addr, data.action, data.ipv4_header.ttl,
-                                data.ipv4_header.protocol, data.ipv4_header.checksum);
+                        println!("LOG(IP HDR): BLOCKED SRC ADDR {}, DST ADDR {}, ACTION {}, TTL {}, PROTOCOL {}",
+                            src_addr, dst_addr, data.action, data.ipv4_header.ttl,
+                            data.ipv4_header.protocol);
+                        println!("LOG(UDP HDR): BLOCKED SRC_PORT {}, DST PORT {}, SEG_LEN {}",
+                            data.udp_header.source,
+                            data.udp_header.dest,
+                            data.udp_header.length);
                     }
                 }
             });
