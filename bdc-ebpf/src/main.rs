@@ -4,7 +4,7 @@
 use core::mem;
 use memoffset::offset_of;
 mod bindings;
-use bindings::{ethhdr, iphdr};
+use bindings::{ethhdr, iphdr, udphdr};
 
 use aya_bpf::{
     macros::{
@@ -21,10 +21,13 @@ use aya_bpf::{
     bindings::xdp_action,
 };
 
-pub use bdc_common::{PacketLog, Ipv4Header};
+pub use bdc_common::{PacketLog, Ipv4Header, UdpHeader};
 
 const ETH_P_IP: u16 = 0x0800;
 const ETH_HDR_LEN: usize = mem::size_of::<ethhdr>();
+const IP_HDR_LEN: usize = mem::size_of::<iphdr>();
+const UDP_HDR_LEN: usize = mem::size_of::<udphdr>();
+const UDP_PROTOCOL: u8 = 17;
 
 #[map(name = "BLOCKLIST")]
 static mut BLOCKLIST: HashMap<u32, u32> = HashMap::<u32,u32>::with_max_entries(1024, 0);
@@ -61,6 +64,13 @@ fn block_ip(address: &u32) -> bool {
     unsafe { BLOCKLIST.get(address).is_some() }
 }
 
+fn is_udp(protocol: &u8) -> bool {
+    if *protocol == UDP_PROTOCOL {
+        return true
+    }
+    false
+}
+
 #[xdp]
 pub fn xdp_firewall(ctx: XdpContext) -> u32 {
     match try_xdp_firewall(ctx) {
@@ -80,9 +90,11 @@ fn try_xdp_firewall(ctx: XdpContext) -> Result<u32, ()>{
         return Ok(xdp_action::XDP_PASS);
     }
     let ip = to_ipv4_hdr(&ctx)?;
-    let action = if block_ip(&ip.src_address) {
+    let action = if is_udp(&ip.protocol) && block_ip(&ip.src_address) {
+        let udp = to_udp_hdr(&ctx)?;
         let log_entry = PacketLog {
             ipv4_header: ip,
+            udp_header: udp,
             action: xdp_action::XDP_DROP,
         };
         unsafe {
@@ -92,7 +104,6 @@ fn try_xdp_firewall(ctx: XdpContext) -> Result<u32, ()>{
     } else {
         xdp_action::XDP_PASS
     };
-
     Ok(action)
 }
 
@@ -136,7 +147,53 @@ fn to_ipv4_hdr(ctx: &XdpContext) -> Result<Ipv4Header, ()> {
     )
 }
 
+fn to_udp_hdr(ctx: &XdpContext)-> Result<UdpHeader, ()> {
+    let source = u16::from_be(
+        unsafe {
+            *ptr_at(
+                &ctx,
+                ETH_HDR_LEN + IP_HDR_LEN + offset_of!(udphdr, source)
+            )?
+        }
+    );
+    let dest = u16::from_be(
+        unsafe {
+            *ptr_at(
+                &ctx,
+                ETH_HDR_LEN + IP_HDR_LEN + offset_of!(udphdr, dest)
+            )?
+        }
+    );
+    let length = u16::from_be(
+        unsafe {
+            *ptr_at(
+                &ctx,
+                ETH_HDR_LEN + IP_HDR_LEN + offset_of!(udphdr, len)
+            )?
+        }
+    );
+    let checksum = u16::from_be(
+        unsafe {
+            *ptr_at(
+                &ctx,
+                ETH_HDR_LEN + IP_HDR_LEN + offset_of!(udphdr, check)
+            )?
+        }
+    );
+    Ok(
+        UdpHeader {
+            source,
+            dest,
+            length,
+            checksum,
+        }
+    )
+}
+
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
     unsafe { core::hint::unreachable_unchecked() }
 }
+
+
+

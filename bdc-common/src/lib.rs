@@ -3,8 +3,8 @@
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct PacketLog {
-    // pub ipv4_address: u32,
     pub ipv4_header: Ipv4Header,
+    pub udp_header: UdpHeader,
     pub action: u32,
 }
 
@@ -26,9 +26,21 @@ pub struct Ipv4Header {
     pub dst_address: u32,
 }
 
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct UdpHeader {
+    pub source: u16,
+    pub dest: u16,
+    pub length: u16,
+    pub checksum: u16,
+}
+
 
 #[cfg(feature = "user")]
 unsafe impl aya::Pod for PacketLog {}
 
 #[cfg(feature = "user")]
 unsafe impl aya::Pod for Ipv4Header {}
+
+#[cfg(feature = "user")]
+unsafe impl aya::Pod for UdpHeader {}
