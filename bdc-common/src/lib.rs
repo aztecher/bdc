@@ -4,6 +4,7 @@
 pub struct PacketLog {
     pub ipv4_header: Ipv4Header,
     pub udp_header: UdpHeader,
+    pub dns_header: DnsHeader,
     pub action: u32,
 }
 
@@ -34,6 +35,17 @@ pub struct UdpHeader {
     pub checksum: u16,
 }
 
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
+pub struct DnsHeader {
+    pub transaction_id: u16,
+    pub flags: u16,
+    pub questions: u16,
+    pub answer_rrs: u16,
+    pub authority_rrs: u16,
+    pub additional_rrs: u16,
+}
+
 
 #[cfg(feature = "user")]
 unsafe impl aya::Pod for PacketLog {}
@@ -43,3 +55,6 @@ unsafe impl aya::Pod for Ipv4Header {}
 
 #[cfg(feature = "user")]
 unsafe impl aya::Pod for UdpHeader {}
+
+#[cfg(feature = "user")]
+unsafe impl aya::Pod for DnsHeader {}

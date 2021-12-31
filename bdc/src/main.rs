@@ -9,6 +9,7 @@ use aya::{
     maps::{
         perf::AsyncPerfEventArray,
         HashMap,
+        MapRefMut,
     },
     include_bytes_aligned,
     Bpf,
@@ -25,9 +26,11 @@ use std::{
         Ipv4Addr,
     },
 };
+use std::io::{BufReader, BufRead};
+use std::fs::File;
 use structopt::StructOpt;
 use tokio::{signal, task};
-use anyhow::{Context, Error};
+use anyhow::{anyhow, Context, Result};
 use bytes::BytesMut;
 use bdc_common::{PacketLog, Ipv4Header};
 
@@ -37,6 +40,33 @@ struct Opt {
     iface: String,
     #[structopt(short, long, default_value = "xdp")]
     bpftype: String,
+}
+
+const ENV_BLOCK_LIST: &str = "ENV_BLOCK_LIST";
+
+fn load_block_list(block_list: &mut HashMap<MapRefMut, u32, u32>) -> Result<()>{
+    let block_file = std::env::var(ENV_BLOCK_LIST)
+        .context(format!("Environmental variable {} not found or contains invalid character", ENV_BLOCK_LIST))?;
+    let f = File::open(&block_file)
+        .context(format!("Cannot open file {}", block_file))?;
+    let reader = BufReader::new(f);
+    for host in reader.lines() {
+        let parsed: Vec<u8> = host.unwrap().split(".")
+            .map(|s| s.parse().unwrap())
+            .collect();
+        if parsed.len() != 4 {
+            return Err(
+                anyhow!(format!("IP list parse error, unexpected length of parsed result"))
+            )
+        }
+        let ipv4: u32 = Ipv4Addr::new(
+            parsed[0],
+            parsed[1],
+            parsed[2],
+            parsed[3]).try_into()?;
+        block_list.insert(ipv4, 0, 0)?;
+    };
+    Ok(())
 }
 
 #[tokio::main]
@@ -62,8 +92,7 @@ async fn main() -> Result<(), anyhow::Error> {
         probe.attach(&opt.iface, XdpFlags::default())?;
 
         let mut blocklist: HashMap<_, u32, u32> = HashMap::try_from(bpf.map_mut("BLOCKLIST")?)?;
-        let block_addr: u32 = Ipv4Addr::new(1, 1, 1, 1).try_into()?;
-        blocklist.insert(block_addr, 0, 0)?;
+        load_block_list(&mut blocklist)?;
 
         let mut perf_array = AsyncPerfEventArray::try_from(bpf.map_mut("BLOCKEVENTS")?)?;
 
@@ -89,6 +118,12 @@ async fn main() -> Result<(), anyhow::Error> {
                             data.udp_header.source,
                             data.udp_header.dest,
                             data.udp_header.length);
+                        println!("LOG(DNS_HDR): BLOCEKD TRANSACTION ID {:#04x}, Question: {}, ANS RRs: {}, Auth RRs {}, Addi RRs {}", 
+                            data.dns_header.transaction_id,
+                            data.dns_header.questions,
+                            data.dns_header.answer_rrs,
+                            data.dns_header.authority_rrs,
+                            data.dns_header.additional_rrs);
                     }
                 }
             });
