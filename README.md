@@ -53,6 +53,12 @@ OPTIONS:
     -i, --iface <iface>         [default: eth0]
 ```
 
+Create list `./bdc/config/block.list` of blocking ip and set its path to `ENV_BLOCK_LIST` environmental variable like bellow
+
+```
+sudo -E ENV_BLOCK_LIST=bdc/config/block.list ./target/debug/bdc -i eno
+```
+
 ## Benchmarks
 
 TODO
