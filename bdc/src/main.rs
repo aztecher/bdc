@@ -27,12 +27,15 @@ use std::{
     },
 };
 use std::io::{BufReader, BufRead};
+use core::mem;
 use std::fs::File;
 use structopt::StructOpt;
 use tokio::{signal, task};
 use anyhow::{anyhow, Context, Result};
 use bytes::BytesMut;
-use bdc_common::{PacketLog, Ipv4Header};
+use bdc_common::PacketLog;
+use simplelog::{ColorChoice, ConfigBuilder, LevelFilter, TermLogger, TerminalMode};
+use aya_log::BpfLogger;
 
 #[derive(Debug, StructOpt)]
 struct Opt {
@@ -81,6 +84,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let mut bpf = Bpf::load(include_bytes_aligned!(
         "../../target/bpfel-unknown-none/debug/bdc"
     ))?;
+
     #[cfg(not(debug_assertions))]
     let mut bpf = Bpf::load(include_bytes_aligned!(
         "../../target/bpfel-unknown-none/release/bdc"
@@ -96,6 +100,18 @@ async fn main() -> Result<(), anyhow::Error> {
 
         let mut perf_array = AsyncPerfEventArray::try_from(bpf.map_mut("BLOCKEVENTS")?)?;
 
+        // // Setup Logger
+        // TermLogger::init(
+        //     LevelFilter::Debug,
+        //     ConfigBuilder::new()
+        //         .set_target_level(LevelFilter::Error)
+        //         .set_location_level(LevelFilter::Error)
+        //         .build(),
+        //     TerminalMode::Mixed,
+        //     ColorChoice::Auto,
+        // ).unwrap();
+        // BpfLogger::init(&mut bpf).unwrap();
+
         for cpu_id in online_cpus()? {
             let mut buf = perf_array.open(cpu_id, None)?;
             task::spawn(async move {
@@ -109,21 +125,68 @@ async fn main() -> Result<(), anyhow::Error> {
                         let buf = &mut buffers[i];
                         let ptr = buf.as_ptr() as *const PacketLog;
                         let data = unsafe { ptr.read_unaligned() };
-                        let src_addr = net::Ipv4Addr::from(data.ipv4_header.src_address);
-                        let dst_addr = net::Ipv4Addr::from(data.ipv4_header.dst_address);
-                        println!("LOG(IP HDR): BLOCKED SRC ADDR {}, DST ADDR {}, ACTION {}, TTL {}, PROTOCOL {}",
-                            src_addr, dst_addr, data.action, data.ipv4_header.ttl,
-                            data.ipv4_header.protocol);
-                        println!("LOG(UDP HDR): BLOCKED SRC_PORT {}, DST PORT {}, SEG_LEN {}",
-                            data.udp_header.source,
-                            data.udp_header.dest,
-                            data.udp_header.length);
-                        println!("LOG(DNS_HDR): BLOCEKD TRANSACTION ID {:#04x}, Question: {}, ANS RRs: {}, Auth RRs {}, Addi RRs {}", 
-                            data.dns_header.transaction_id,
-                            data.dns_header.questions,
-                            data.dns_header.answer_rrs,
-                            data.dns_header.authority_rrs,
-                            data.dns_header.additional_rrs);
+                        // let src_addr = net::Ipv4Addr::from(data.ipv4_header.src_address);
+                        // let dst_addr = net::Ipv4Addr::from(data.ipv4_header.dst_address);
+                        // println!("LOG(IP HDR): BLOCKED SRC ADDR {}, DST ADDR {}, ACTION {}, TTL {}, PROTOCOL {}",
+                        //     src_addr, dst_addr, data.action, data.ipv4_header.ttl,
+                        //     data.ipv4_header.protocol);
+                        // println!("LOG(UDP HDR): BLOCKED SRC_PORT {}, DST PORT {}, SEG_LEN {}",
+                        //     data.udp_header.source,
+                        //     data.udp_header.dest,
+                        //     data.udp_header.length);
+                        // println!("LOG(DNS_HDR): BLOCEKD TRANSACTION ID {:#04x}, Question: {}, ANS RRs: {}, Auth RRs {}, Addi RRs {}", 
+                        //     data.dns_header.transaction_id,
+                        //     data.dns_header.questions,
+                        //     data.dns_header.answer_rrs,
+                        //     data.dns_header.authority_rrs,
+                        //     data.dns_header.additional_rrs);
+                        // println!("LOG(FLAGS): {:?}, {:?}, {:?}, {:?}, {:?}, {:?}, {:?}, {:?}, {:?}, {:?}",
+                        //     data.dns_flags.qr,
+                        //     data.dns_flags.opcode,
+                        //     data.dns_flags.aa,
+                        //     data.dns_flags.tc,
+                        //     data.dns_flags.rd,
+                        //     data.dns_flags.ra,
+                        //     data.dns_flags.z,
+                        //     data.dns_flags.ad,
+                        //     data.dns_flags.cd,
+                        //     data.dns_flags.rcode,
+                        //     );
+                        // let mut domain = String::new();
+                        // let mut flag = false;
+                        // // TODO: have to turncate 0, but String end '00', so not must
+                        // let mut label_len: usize = 0;
+                        // for (index, d) in data.question.data.iter().enumerate() {
+                        //     if flag {
+                        //         continue
+                        //     }
+                        //     // Question section retrieve raw data, so it's little endian
+                        //     for (i, byte) in d.to_be_bytes().iter().rev().enumerate() {
+                        //         if flag {
+                        //             continue
+                        //         }
+                        //         if label_len == index * 4 + i {
+                        //             // label is separated by '.' in bind response
+                        //             if label_len != 0 {
+                        //                 domain.push_str(".");
+                        //             }
+                        //             // if label value is '0x00' then its the end of question
+                        //             // section
+                        //             if *byte == 0 {
+                        //                 flag = true;
+                        //             }
+                        //             label_len += *byte as usize + 1;
+                        //             continue
+                        //         }
+                        //         domain.push_str(&(*byte as char).to_string())
+                        //     }
+                        // }
+                        println!("FIXED LENGTH ARRAY: parse_res = {:?}, raw_data = {:?}, label_lens = {:?}, data = {:?}",
+                            data.question.parse_result,
+                            data.question.raw_data,
+                            data.question.label_lens,
+                            data.question.data,
+                        );
                     }
                 }
             });
@@ -147,6 +210,7 @@ async fn main() -> Result<(), anyhow::Error> {
         // Ok(())
     } else {
         // DEPLICATED CODE
+        // BPF_PROG_TYPE_SCHED_CLS
         tc::qdisc_add_clsact(&opt.iface)?;
         let program: &mut SchedClassifier = bpf.program_mut("bdc").unwrap().try_into()?;
         program.load()?;
