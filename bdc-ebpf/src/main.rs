@@ -34,6 +34,7 @@ pub use bdc_common::{
     UdpHeader,
     DnsHeader,
     DnsFlags,
+    MAX_DNS_NAME_LENGTH,
     Question,
 };
 
@@ -46,8 +47,6 @@ const UDP_PROTOCOL: u8   = 17;
 const OFFSET_16BIT: usize = mem::size_of::<u16>();
 const OFFSET_8BIT: usize = mem::size_of::<u8>();
 const DNS_PORT: u16      = 53;
-
-const MAX_DNS_NAME_LENGTH: u16 = 256;
 
 
 #[repr(C)]
@@ -110,78 +109,36 @@ fn is_dns_port(port: &u16) -> bool {
     false
 }
 
-#[inline(never)]
 #[unroll_for_loops]
-fn parse_dns_query(
-    question: &Question,
-    res: &mut [u32; 16],
-    label_lens: &mut [u8; 16],
-    raw_data: &mut [u8; 32],
-    ) -> Result<(), i32>
-{
-    let mut label_len: u8 = 0;
-    let mut res_cursor: usize = 0;
-    let mut chunk: [u8; 4] = [0; 4];
-    let mut chunk_cursor: usize  = 0;
-    let mut label_lens_cursor: usize = 0;
-    let mut raw_data_cursor: usize = 0;
-    for index_u32 in 0..16 {
-        let data: u32 = question.data[index_u32];
-        let data_u8: [u8; 4] = data.to_be_bytes();
-        for index_u8 in 0..4 {
-            let index_u8_rev = 3 - index_u8;
-            let d = data_u8[index_u8_rev];
-            let subcursor = index_u32 * 4 + index_u8;
-            // TODO: Bellow code cause eBPF verifyer error of 'no space left on device'
-            // Will checkout how to figure out the methods of expand eBPF buffer size.
-            //
-            // BPF_PROG_LOAD systemcall's bpf buffer size is setted here.
-            // https://github.com/aya-rs/aya/blob/faa36763f78d3190492508ce9ed40d98eca81750/aya/src/sys/bpf.rs#L85-L90
-            //
-            // /home/mmichish/.cargo/registry/src/github.com-1ecc6299db9ec823/aya-0.10.6/src/programs/mod.rs
-            // grow -> MAX_LOG_BUF_SIZE=(std::u32::MAX >> 8) as usize = 16777215
-            let d_some = if d == 0 { Some(0) }
-            else if d == 1 { Some(1) }
-            else if d == 2 { Some(2) }
-            else if d == 3 { Some(3) }
-            else if d == 4 { Some(4) }
-            else if d == 5 { Some(5) }
-            else if d == 6 { Some(6) }
-            else if d == 7 { Some(7) }
-            else if d == 8 { Some(8) }
-            else if d == 9 { Some(9) }
-            else if d == 10 { Some(10) }
-            else if d == 11 { Some(11) }
-            else if d == 12 { Some(12) }
-            else { None };
-            match d_some {
-                Some(v) => {
-                    if subcursor as u8 == label_len {
-                        if v == 0 {
-                            return Ok(())
-                        }
-                        label_len += v + 1;
-                        label_lens[label_lens_cursor] = label_len;
-                        label_lens_cursor += 1;
-                    } else {
-                        if chunk_cursor == 4 {
-                            res[res_cursor] = u32::from_be_bytes(chunk);
-                            res_cursor += 1;
-                            chunk = [0; 4];
-                            chunk_cursor = 0;
-                        } else {
-                            chunk[chunk_cursor] = v;
-                            chunk_cursor += 1;
-                        }
-                    }
-                },
-                None => {
-                    raw_data[raw_data_cursor] = 120;
-                }
+fn parse_query(ctx: &XdpContext) -> Result<[u8; MAX_DNS_NAME_LENGTH], ()>{
+    let mut r: [u8; MAX_DNS_NAME_LENGTH] = [0; MAX_DNS_NAME_LENGTH];
+    let mut label_loc: u8 = 0;
+    let mut cursor = 0;
+    let question_offset = ETH_HDR_LEN + IP_HDR_LEN + UDP_HDR_LEN + DNS_HDR_LEN;
+    for index in 0..40 {
+        // MEMO: MAX_DNS_NAME_LENGTH(=40) caused error used in this code?
+        // > invalid access to packet, off=54 size=1, R3(id=0,off=54,r=53)
+        // > 3 offset is outside of the packet
+        let offset = index * OFFSET_8BIT;
+        let t_offset = question_offset + offset;
+        let data: u8 = u8::from_be( unsafe { *ptr_at(&ctx, t_offset)? } );
+        if label_loc == offset as u8 {
+            // check if the location is root label
+            if data == 0 {
+                return Ok(r)
             }
+            // calculate next label location
+            if label_loc + data + 1 < MAX_DNS_NAME_LENGTH as u8 {
+                label_loc = label_loc + data + 1;
+            } else {
+                return Err(())
+            }
+        } else {
+            r[cursor] = data;
+            cursor += 1;
         }
     }
-    Ok(())
+    Ok(r)
 }
 
 #[xdp]
@@ -213,19 +170,11 @@ fn try_xdp_rx_filter(ctx: XdpContext) -> Result<u32, ()>{
     if !is_dns_port(&udp.source) {
         return Ok(xdp_action::XDP_PASS)
     }
-    let dns = to_dns_hdr(&ctx)?;
-    let question = to_question(&ctx)?;
-    let mut res = [0; 16];
-    let mut raw_data = [0; 32];
-    let mut label_lens = [0; 16];
-    let parse_result = match parse_dns_query(
-        &question,
-        &mut res,
-        &mut label_lens,
-        &mut raw_data,
-    ) {
-        Ok(()) => 1,
-        Err(e) => e,
+    // let dns = to_dns_hdr(&ctx)?;
+    // let question = to_question(&ctx)?;
+    let parse_result = match parse_query(&ctx) {
+        Ok(r) => r,
+        Err(_) => [0; MAX_DNS_NAME_LENGTH],
     };
     let log_entry = PacketLog {
         // ipv4_header: ip,
@@ -234,10 +183,7 @@ fn try_xdp_rx_filter(ctx: XdpContext) -> Result<u32, ()>{
         // action: xdp_action::XDP_DROP,
         // question,
         question: Question {
-            parse_result,
-            raw_data,
-            label_lens,
-            data: res,
+            data: parse_result,
         },
     };
     unsafe {
@@ -391,19 +337,19 @@ fn to_dns_hdr(ctx: &XdpContext) -> Result<DnsHeader, ()> {
     )
 }
 
-fn to_question(ctx: &XdpContext) -> Result<Question, ()> {
-    let offset_to_question = ETH_HDR_LEN + IP_HDR_LEN + UDP_HDR_LEN + DNS_HDR_LEN;
-    let data: [u32; 16] = unsafe { *ptr_at(&ctx, offset_to_question)? };
-    Ok(
-        Question {
-            parse_result: 0,
-            raw_data: [0; 32],
-            data,
-            label_lens: [0; 16],
-        }
-    )
-
-}
+// fn to_question(ctx: &XdpContext) -> Result<Question, ()> {
+//     let offset_to_question = ETH_HDR_LEN + IP_HDR_LEN + UDP_HDR_LEN + DNS_HDR_LEN;
+//     let data: [u32; 16] = unsafe { *ptr_at(&ctx, offset_to_question)? };
+//     Ok(
+//         Question {
+//             parse_result: 0,
+//             raw_data: [0; MAX_DNS_NAME_LENGTH],
+//             data,
+//             label_lens: [0; 16],
+//         }
+//     )
+//
+// }
 
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {

@@ -181,10 +181,7 @@ async fn main() -> Result<(), anyhow::Error> {
                         //         domain.push_str(&(*byte as char).to_string())
                         //     }
                         // }
-                        println!("FIXED LENGTH ARRAY: parse_res = {:?}, raw_data = {:?}, label_lens = {:?}, data = {:?}",
-                            data.question.parse_result,
-                            data.question.raw_data,
-                            data.question.label_lens,
+                        println!("FIXED LENGTH ARRAY: data = {:?}",
                             data.question.data,
                         );
                     }

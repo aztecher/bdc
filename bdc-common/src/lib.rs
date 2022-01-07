@@ -211,22 +211,18 @@ impl From<u16> for RCode {
     }
 }
 
+pub const MAX_DNS_NAME_LENGTH: usize = 40;
+
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct Question {
-    pub parse_result: i32,
-    pub raw_data: [u8; 32],
-    pub label_lens: [u8; 16],
-    pub data: [u32; 16],
+    pub data: [u8; MAX_DNS_NAME_LENGTH],
 }
 
 impl Default for Question {
     fn default() -> Self {
         Question {
-            parse_result: 0,
-            raw_data: [0; 32],
-            label_lens: [0; 16],
-            data: [0; 16],
+            data: [0; MAX_DNS_NAME_LENGTH],
         }
     }
 }
