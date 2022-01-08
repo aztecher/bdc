@@ -66,6 +66,9 @@ static mut BLOCKLIST: HashMap<u32, u32> = HashMap::<u32,u32>::with_max_entries(1
 #[map(name = "BLOCKEVENTS")]
 static mut BLOCKEVENTS: PerfEventArray<PacketLog> = PerfEventArray::<PacketLog>::with_max_entries(1024, 0);
 
+#[map(name = "DNSCACHE")]
+static mut DNSCACHE: HashMap<Question, u32> = HashMap::<Question, u32>::with_max_entries(1024, 0);
+
 #[classifier(name="bdc")]
 pub fn bdc(ctx: SkBuffContext) -> i32 {
     match unsafe { try_bdc(ctx) } {
@@ -89,6 +92,10 @@ unsafe fn ptr_at<T>(ctx: &XdpContext, offset: usize) -> Result<*const T, ()> {
         return Err(());
     }
     Ok((start + offset) as *const T)
+}
+
+fn cache_search(fqdn: &Question) -> Option<&u32> {
+    unsafe { DNSCACHE.get(fqdn) }
 }
 
 fn block_ip(address: &u32) -> bool {
@@ -171,21 +178,15 @@ fn try_xdp_rx_filter(ctx: XdpContext) -> Result<u32, ()>{
         return Ok(xdp_action::XDP_PASS)
     }
     // let dns = to_dns_hdr(&ctx)?;
-    // let question = to_question(&ctx)?;
-    let parse_result = match parse_query(&ctx) {
-        Ok(r) => r,
-        Err(_) => [0; MAX_DNS_NAME_LENGTH],
-    };
-    let log_entry = PacketLog {
-        // ipv4_header: ip,
-        // udp_header: udp,
-        // dns_header: dns,
-        // action: xdp_action::XDP_DROP,
-        // question,
-        question: Question {
-            data: parse_result,
-        },
-    };
+    let parse_result = parse_query(&ctx).unwrap_or([0; MAX_DNS_NAME_LENGTH]);
+    let question = Question { data: parse_result };
+    // TODO: if not cache hit, then XDP_PASS
+    // let log_entry = match cache_search(&question) {
+    //     Some(ipv4) => PacketLog { question, hit: true, ipv4: *ipv4 },
+    //     None => PacketLog { question, hit: false, ipv4: 0 },
+    // };
+    let ipv4 = *cache_search(&question).unwrap_or(&0);
+    let log_entry = PacketLog { ipv4 };
     unsafe {
         BLOCKEVENTS.output(&ctx, &log_entry, 0);
     }
@@ -336,20 +337,6 @@ fn to_dns_hdr(ctx: &XdpContext) -> Result<DnsHeader, ()> {
         }
     )
 }
-
-// fn to_question(ctx: &XdpContext) -> Result<Question, ()> {
-//     let offset_to_question = ETH_HDR_LEN + IP_HDR_LEN + UDP_HDR_LEN + DNS_HDR_LEN;
-//     let data: [u32; 16] = unsafe { *ptr_at(&ctx, offset_to_question)? };
-//     Ok(
-//         Question {
-//             parse_result: 0,
-//             raw_data: [0; MAX_DNS_NAME_LENGTH],
-//             data,
-//             label_lens: [0; 16],
-//         }
-//     )
-//
-// }
 
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {

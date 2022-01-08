@@ -7,7 +7,8 @@ pub struct PacketLog {
     // pub dns_header: DnsHeader,
     // pub dns_flags: DnsFlags,
     // pub action: u32,
-    pub question: Question,
+    // pub question: Question,
+    pub ipv4: u32,
 }
 
 pub struct EthernetHeader {
@@ -275,6 +276,3 @@ unsafe impl aya::Pod for RCode {}
 
 #[cfg(feature = "user")]
 unsafe impl aya::Pod for Question {}
-
-
-
