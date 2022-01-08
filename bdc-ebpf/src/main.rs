@@ -3,6 +3,9 @@
 
 use core::mem;
 use memoffset::offset_of;
+use unroll::unroll_for_loops;
+use usize_cast::IntoUsize;
+use aya_log_ebpf::info;
 mod bindings;
 use bindings::{
     __u16,
@@ -10,7 +13,6 @@ use bindings::{
     iphdr,
     udphdr,
 };
-
 use aya_bpf::{
     macros::{
         classifier,
@@ -31,6 +33,9 @@ pub use bdc_common::{
     Ipv4Header,
     UdpHeader,
     DnsHeader,
+    DnsFlags,
+    MAX_DNS_NAME_LENGTH,
+    Question,
 };
 
 const ETH_P_IP: u16      = 0x0800;
@@ -39,7 +44,10 @@ const IP_HDR_LEN: usize  = mem::size_of::<iphdr>();
 const UDP_HDR_LEN: usize = mem::size_of::<udphdr>();
 const DNS_HDR_LEN: usize = mem::size_of::<dnshdr>();
 const UDP_PROTOCOL: u8   = 17;
+const OFFSET_16BIT: usize = mem::size_of::<u16>();
+const OFFSET_8BIT: usize = mem::size_of::<u8>();
 const DNS_PORT: u16      = 53;
+
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -57,6 +65,9 @@ static mut BLOCKLIST: HashMap<u32, u32> = HashMap::<u32,u32>::with_max_entries(1
 
 #[map(name = "BLOCKEVENTS")]
 static mut BLOCKEVENTS: PerfEventArray<PacketLog> = PerfEventArray::<PacketLog>::with_max_entries(1024, 0);
+
+#[map(name = "DNSCACHE")]
+static mut DNSCACHE: HashMap<Question, u32> = HashMap::<Question, u32>::with_max_entries(1024, 0);
 
 #[classifier(name="bdc")]
 pub fn bdc(ctx: SkBuffContext) -> i32 {
@@ -83,6 +94,10 @@ unsafe fn ptr_at<T>(ctx: &XdpContext, offset: usize) -> Result<*const T, ()> {
     Ok((start + offset) as *const T)
 }
 
+fn cache_search(fqdn: &Question) -> Option<&u32> {
+    unsafe { DNSCACHE.get(fqdn) }
+}
+
 fn block_ip(address: &u32) -> bool {
     unsafe { BLOCKLIST.get(address).is_some() }
 }
@@ -101,16 +116,48 @@ fn is_dns_port(port: &u16) -> bool {
     false
 }
 
+#[unroll_for_loops]
+fn parse_query(ctx: &XdpContext) -> Result<[u8; MAX_DNS_NAME_LENGTH], ()>{
+    let mut r: [u8; MAX_DNS_NAME_LENGTH] = [0; MAX_DNS_NAME_LENGTH];
+    let mut label_loc: u8 = 0;
+    let mut cursor = 0;
+    let question_offset = ETH_HDR_LEN + IP_HDR_LEN + UDP_HDR_LEN + DNS_HDR_LEN;
+    for index in 0..40 {
+        // MEMO: MAX_DNS_NAME_LENGTH(=40) caused error used in this code?
+        // > invalid access to packet, off=54 size=1, R3(id=0,off=54,r=53)
+        // > 3 offset is outside of the packet
+        let offset = index * OFFSET_8BIT;
+        let t_offset = question_offset + offset;
+        let data: u8 = u8::from_be( unsafe { *ptr_at(&ctx, t_offset)? } );
+        if label_loc == offset as u8 {
+            // check if the location is root label
+            if data == 0 {
+                return Ok(r)
+            }
+            // calculate next label location
+            if label_loc + data + 1 < MAX_DNS_NAME_LENGTH as u8 {
+                label_loc = label_loc + data + 1;
+            } else {
+                return Err(())
+            }
+        } else {
+            r[cursor] = data;
+            cursor += 1;
+        }
+    }
+    Ok(r)
+}
+
 #[xdp]
-pub fn xdp_firewall(ctx: XdpContext) -> u32 {
-    match try_xdp_firewall(ctx) {
+pub fn xdp_rx_filter(ctx: XdpContext) -> u32 {
+    match try_xdp_rx_filter(ctx) {
         Ok(ret) => ret,
         Err(_) => xdp_action::XDP_ABORTED,
     }
 }
 
 
-fn try_xdp_firewall(ctx: XdpContext) -> Result<u32, ()>{
+fn try_xdp_rx_filter(ctx: XdpContext) -> Result<u32, ()>{
     let h_proto = u16::from_be(
         unsafe {
             *ptr_at(&ctx, offset_of!(ethhdr, h_proto))?
@@ -130,13 +177,16 @@ fn try_xdp_firewall(ctx: XdpContext) -> Result<u32, ()>{
     if !is_dns_port(&udp.source) {
         return Ok(xdp_action::XDP_PASS)
     }
-    let dns = to_dns_hdr(&ctx)?;
-    let log_entry = PacketLog {
-        ipv4_header: ip,
-        udp_header: udp,
-        dns_header: dns,
-        action: xdp_action::XDP_DROP,
-    };
+    // let dns = to_dns_hdr(&ctx)?;
+    let parse_result = parse_query(&ctx).unwrap_or([0; MAX_DNS_NAME_LENGTH]);
+    let question = Question { data: parse_result };
+    // TODO: if not cache hit, then XDP_PASS
+    // let log_entry = match cache_search(&question) {
+    //     Some(ipv4) => PacketLog { question, hit: true, ipv4: *ipv4 },
+    //     None => PacketLog { question, hit: false, ipv4: 0 },
+    // };
+    let ipv4 = *cache_search(&question).unwrap_or(&0);
+    let log_entry = PacketLog { ipv4 };
     unsafe {
         BLOCKEVENTS.output(&ctx, &log_entry, 0);
     }

@@ -6,7 +6,10 @@ edition = "2018"
 [dependencies]
 aya-bpf = { git = "http://github.com/aya-rs/aya", branch = "main" }
 bdc-common = { path = "../bdc-common" }
+aya-log-ebpf = { git = "https://github.com/aya-rs/aya-log", branch = "main" }
 memoffset = "0.6"
+unroll = "0.1"
+usize_cast = "1.1.0"
 
 [[bin]]
 name = "bdc"

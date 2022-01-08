@@ -53,10 +53,11 @@ OPTIONS:
     -i, --iface <iface>         [default: eth0]
 ```
 
-Create list `./bdc/config/block.list` of blocking ip and set its path to `ENV_BLOCK_LIST` environmental variable like bellow
+Create list `./bdc/config/block.list` of blocking ip and `./bdc/config/cache.list` of cache FQDN/IP (Originally, it would match cached DNS requests once they come in, but since it's not implemented yet, we'll warm up the cache from the configuration file for now)
+And Set its path to `ENV_BLOCK_LIST`, `ENV_DNS_CACHE` environmental variable like bellow
 
 ```
-sudo -E ENV_BLOCK_LIST=bdc/config/block.list ./target/debug/bdc -i eno
+sudo -E RUST_BACKTRACE=1 ENV_BLOCK_LIST=bdc/config/block.list ENV_DNS_CACHE=bdc/config/cache.list ./target/debug/bdc -i eno1
 ```
 
 ## Benchmarks

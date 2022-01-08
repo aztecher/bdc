@@ -5,13 +5,14 @@ edition = "2018"
 publish = false
 
 [dependencies]
-aya = { git = "https://github.com/aya-rs/aya", branch="main", features = ["async_tokio"] }
+aya = { version = "0.10.6", features = ["async_tokio"] }
 bdc-common = { path = "../bdc-common", features=["user"] }
+aya-log = { git = "https://github.com/aya-rs/aya-log", branch = "main" }
+simplelog = "0.11.1"
 anyhow = "1.0.42"
 ctrlc = "3.2"
 bytes = "1"
 tokio = { version = "1.9.0", features = ["full"] }
-
 structopt = { version = "0.3"}
 
 [[bin]]
