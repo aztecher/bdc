@@ -23,8 +23,7 @@ use aya_bpf::{
         SkBuffContext,
         XdpContext,
     },
-    maps::PerfEventArray,
-    maps::HashMap,
+    maps::{PerfEventArray, HashMap, ProgramArray},
     bindings::xdp_action,
 };
 
@@ -69,6 +68,12 @@ static mut BLOCKEVENTS: PerfEventArray<PacketLog> = PerfEventArray::<PacketLog>:
 #[map(name = "DNSCACHE")]
 static mut DNSCACHE: HashMap<Question, u32> = HashMap::<Question, u32>::with_max_entries(1024, 0);
 
+#[map(name = "JUMP_TABLE")]
+static mut JUMP_TABLE: ProgramArray = ProgramArray::with_max_entries(10, 0);
+
+#[map(name = "TAIL_CALL_EVENTS")]
+static mut TAIL_CALL_EVENTS: HashMap<u32, u32> = HashMap::<u32, u32>::with_max_entries(10, 0);
+
 #[classifier(name="bdc")]
 pub fn bdc(ctx: SkBuffContext) -> i32 {
     match unsafe { try_bdc(ctx) } {
@@ -80,7 +85,6 @@ pub fn bdc(ctx: SkBuffContext) -> i32 {
 unsafe fn try_bdc(_ctx: SkBuffContext) -> Result<i32, i32> {
     Ok(0)
 }
-
 
 #[inline(always)]
 unsafe fn ptr_at<T>(ctx: &XdpContext, offset: usize) -> Result<*const T, ()> {
@@ -122,7 +126,7 @@ fn parse_query(ctx: &XdpContext) -> Result<[u8; MAX_DNS_NAME_LENGTH], ()>{
     let mut label_loc: u8 = 0;
     let mut cursor = 0;
     let question_offset = ETH_HDR_LEN + IP_HDR_LEN + UDP_HDR_LEN + DNS_HDR_LEN;
-    for index in 0..40 {
+    for index in 0..60 {
         // MEMO: MAX_DNS_NAME_LENGTH(=40) caused error used in this code?
         // > invalid access to packet, off=54 size=1, R3(id=0,off=54,r=53)
         // > 3 offset is outside of the packet
@@ -148,7 +152,7 @@ fn parse_query(ctx: &XdpContext) -> Result<[u8; MAX_DNS_NAME_LENGTH], ()>{
     Ok(r)
 }
 
-#[xdp]
+#[xdp(name="rx_filter")]
 pub fn xdp_rx_filter(ctx: XdpContext) -> u32 {
     match try_xdp_rx_filter(ctx) {
         Ok(ret) => ret,
@@ -174,21 +178,14 @@ fn try_xdp_rx_filter(ctx: XdpContext) -> Result<u32, ()>{
         return Ok(xdp_action::XDP_PASS)
     }
     let udp = to_udp_hdr(&ctx)?;
-    if !is_dns_port(&udp.source) {
+    if !is_dns_port(&udp.dest) {
         return Ok(xdp_action::XDP_PASS)
     }
-    // let dns = to_dns_hdr(&ctx)?;
-    let parse_result = parse_query(&ctx).unwrap_or([0; MAX_DNS_NAME_LENGTH]);
-    let question = Question { data: parse_result };
-    // TODO: if not cache hit, then XDP_PASS
-    // let log_entry = match cache_search(&question) {
-    //     Some(ipv4) => PacketLog { question, hit: true, ipv4: *ipv4 },
-    //     None => PacketLog { question, hit: false, ipv4: 0 },
-    // };
-    let ipv4 = *cache_search(&question).unwrap_or(&0);
-    let log_entry = PacketLog { ipv4 };
+    // JUMP to rx_parse_question
     unsafe {
-        BLOCKEVENTS.output(&ctx, &log_entry, 0);
+        if let Err(_) = JUMP_TABLE.tail_call(&ctx, 0) {
+            return Ok(xdp_action::XDP_PASS)
+        }
     }
     Ok(xdp_action::XDP_DROP)
 }
@@ -337,6 +334,35 @@ fn to_dns_hdr(ctx: &XdpContext) -> Result<DnsHeader, ()> {
         }
     )
 }
+
+#[xdp(name="rx_parse_question")]
+pub fn rx_parse_question(ctx: XdpContext) -> u32 {
+    let parse_result = parse_query(&ctx).unwrap_or([0; MAX_DNS_NAME_LENGTH]);
+    let question = Question { data: parse_result };
+    let ipv4 = *cache_search(&question).unwrap_or(&0);
+    let log_entry = PacketLog { ipv4 };
+    unsafe {
+        BLOCKEVENTS.output(&ctx, &log_entry, 0);
+        // Jump to prepare_packet
+        if let Err(_) = JUMP_TABLE.tail_call(&ctx, 1) {
+            return xdp_action::XDP_PASS
+        }
+    }
+    xdp_action::XDP_DROP
+}
+
+#[xdp(name="prepare_packet")]
+pub fn prepare_packet(ctx: XdpContext) -> u32 {
+    unsafe {
+        // Jump to write_reply
+        if let Err(_) = JUMP_TABLE.tail_call(&ctx, 2) {
+        }
+    }
+    xdp_action::XDP_DROP
+}
+
+#[xdp(name="write_reply")]
+pub fn write_reply(_ctx: XdpContext) -> u32 { xdp_action::XDP_DROP }
 
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
