@@ -1,11 +1,11 @@
 # Setup minimal DNS server for testbench
 
-本稿では`BDC`を動作させるホスト上に最小構成のDNSサーバのセットアップを実施する方法を記載する
-概略は以下の通り
+This documents describes how to set up a minimal DNS server on a host running BDC.  
+The outline is as follows
 
-* OSはUbuntu 20.04LTSを利用
-* Bind9でDNSを構築
-* 単一のFQDNとそれに対応するIPアドレスについてのリクエストにのみ返答する
+* Use Ubuntu 20.04LTS as OS
+* Setup DNS with BIND9
+* Only respond to requests for a single FQDN and corresponding IP address
 * Not in Production
 
 ## Install and setup
@@ -14,12 +14,12 @@
 
 | Property | Description |
 |----------|-------------|
-| CLINET FQDN | クライアントのFQDN. <CLIENT FQDN WITHOUT DOMAIN>.<DOMAIN>と同一 |
-| CLIENT FQDN WITHOUT DOMAIN | クライアントのFQDNからDOMAINを抜いたもの |
-| DOMAIN | クライアントのDOMAIN |
-| CLIENT IP ADDRESS | クライアントのIPアドレス |
-| NAME SERVER FQDN | ネームサーバのFQDN |
-| NAME SERVER IP | ネームサーバのIPアドレス |
+| CLINET FQDN | Client FQDN. Same as `<CLIENT FQDN WITHOUT DOMAIN>.<DOMAIN>` |
+| CLIENT FQDN WITHOUT DOMAIN | Client FQDN minus DOMAIN |
+| DOMAIN | Client DOMAIN |
+| CLIENT IP ADDRESS | Client IP Address |
+| NAME SERVER FQDN | NameServer(Host) FQDN |
+| NAME SERVER IP | NameServer(Host) IP Address|
 
 ### Setup
 
@@ -71,26 +71,26 @@ EOF
 
 ### Varidation and Run
 
-以下のコマンドで設定項目に問題がないかを確認する
+Check the configuration by bellow command line tools
 
 ```bash
 /usr/sbin/named-checkconf
 /usr/sbin/named-checkzone <DOMAIN> /var/cache/bind/<DOMAIN>.zone
 ```
 
-問題ない場合は、サービスを有効化する。
+If there is no problem, then enable `named` service.
 
 ```bash
 sudo systemctl start named
 ```
 
-上記の設定では、DNSサーバ自体、もしくはクライアントサーバからのDNS Aレコード問い合わせのみ許可している
-両方で以下のように確認できればOK
+The above configuration only allows DNS A record queries from the DNS server itself or from the client server.
+It is OK if both servers confirm the following
 
 ```bash
-# DNSサーバ内部で確認
+# Check inside the DNS server
 $ dig @localhost <CLIENT FQDN>
 
-# クライアントサーバ内部で確認
+# Check inside the client server
 $ dig @<NAME SERVER IP> <CLIENT FQDN>
 ```
