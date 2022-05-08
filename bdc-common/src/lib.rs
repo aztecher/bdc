@@ -11,6 +11,8 @@ pub struct PacketLog {
     pub ipv4: u32,
 }
 
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
 pub struct EthernetHeader {
 }
 
@@ -212,7 +214,8 @@ impl From<u16> for RCode {
     }
 }
 
-pub const MAX_DNS_NAME_LENGTH: usize = 40;
+// pub const MAX_DNS_NAME_LENGTH: usize = 40;
+pub const MAX_DNS_NAME_LENGTH: usize =  64;
 
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
