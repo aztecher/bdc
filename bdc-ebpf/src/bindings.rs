@@ -86,7 +86,7 @@ pub type __u32 = ::aya_bpf::cty::c_uint;
 pub type __be16 = __u16;
 pub type __be32 = __u32;
 #[repr(C)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Copy, Clone)]
 pub struct ethhdr {
     pub h_dest: [::aya_bpf::cty::c_uchar; 6usize],
     pub h_source: [::aya_bpf::cty::c_uchar; 6usize],
@@ -94,7 +94,7 @@ pub struct ethhdr {
 }
 pub type __sum16 = __u16;
 #[repr(C)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Copy, Clone)]
 pub struct tcphdr {
     pub source: __be16,
     pub dest: __be16,
@@ -275,7 +275,7 @@ impl tcphdr {
     }
 }
 #[repr(C)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Copy, Clone)]
 pub struct iphdr {
     pub _bitfield_align_1: [u8; 0],
     pub _bitfield_1: __BindgenBitfieldUnit<[u8; 1usize]>,
@@ -327,7 +327,7 @@ impl iphdr {
     }
 }
 #[repr(C)]
-#[derive(Debug, Copy, Clone)]
+#[derive(Copy, Clone)]
 pub struct udphdr {
     pub source: __be16,
     pub dest: __be16,
