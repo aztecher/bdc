@@ -167,9 +167,6 @@ fn warm_cache(dns_cache: &mut HashMap<MapRefMut, Question, u32>) -> Result<()> {
 async fn main() -> Result<(), anyhow::Error> {
     let opt = Opt::from_args();
 
-    // let bpf_progs_desc: std::collections::HashMap<String, BpfProgDesc> = vec![
-    //     BpfProgDesc::new("rx_parse_question".to_string(), 0, 0),
-    // ];
     let mut bpf_progs_desc = std::collections::HashMap::<String, BpfProgDesc>::new();
     bpf_progs_desc.insert("rx_parse_question".to_string(), BpfProgDesc::new("rx_parse_question".to_string(), 0, 0));
     bpf_progs_desc.insert("prepare_packet".to_string(), BpfProgDesc::new("rx_prepare_packet".to_string(), 1, 0));
@@ -188,6 +185,18 @@ async fn main() -> Result<(), anyhow::Error> {
     let mut bpf = Bpf::load(include_bytes_aligned!(
         "../../target/bpfel-unknown-none/release/bdc"
     ))?;
+
+    // setup logger
+    TermLogger::init(
+        LevelFilter::Debug,
+        ConfigBuilder::new()
+            .set_target_level(LevelFilter::Error)
+            .set_location_level(LevelFilter::Error)
+            .build(),
+        TerminalMode::Mixed,
+        ColorChoice::Auto,
+    ).unwrap();
+    BpfLogger::init(&mut bpf).unwrap();
 
     let mut prog_array = ProgramArray::try_from(bpf.map_mut("JUMP_TABLE")?)?;
     if opt.bpftype == "xdp" {

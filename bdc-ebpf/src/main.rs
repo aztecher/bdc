@@ -1,11 +1,16 @@
 #![no_std]
 #![no_main]
+#![feature(never_type)]
 
 use core::mem;
 use memoffset::offset_of;
 use unroll::unroll_for_loops;
 use usize_cast::IntoUsize;
 use aya_log_ebpf::info;
+#[allow(non_upper_case_globals)]
+#[allow(non_snake_case)]
+#[allow(non_camel_case_types)]
+#[allow(dead_code)]
 mod bindings;
 use bindings::{
     __u16,
@@ -14,6 +19,7 @@ use bindings::{
     udphdr,
 };
 use aya_bpf::{
+    BpfContext,
     macros::{
         classifier,
         map,
@@ -25,6 +31,7 @@ use aya_bpf::{
     },
     maps::{PerfEventArray, HashMap, ProgramArray},
     bindings::xdp_action,
+    helpers::gen::bpf_xdp_adjust_head,
 };
 
 pub use bdc_common::{
@@ -58,6 +65,7 @@ pub struct dnshdr {
     pub authority_rrs: __u16,
     pub additional_rrs: __u16,
 }
+
 
 #[map(name = "BLOCKLIST")]
 static mut BLOCKLIST: HashMap<u32, u32> = HashMap::<u32,u32>::with_max_entries(1024, 0);
@@ -337,6 +345,7 @@ fn to_dns_hdr(ctx: &XdpContext) -> Result<DnsHeader, ()> {
 
 #[xdp(name="rx_parse_question")]
 pub fn rx_parse_question(ctx: XdpContext) -> u32 {
+    info!(&ctx, "[tail_call] rx_parse_question");
     let parse_result = parse_query(&ctx).unwrap_or([0; MAX_DNS_NAME_LENGTH]);
     let question = Question { data: parse_result };
     let ipv4 = *cache_search(&question).unwrap_or(&0);
@@ -351,18 +360,39 @@ pub fn rx_parse_question(ctx: XdpContext) -> u32 {
     xdp_action::XDP_DROP
 }
 
+// pub unsafe fn xdp_adjust_head(ctx: &XdpContext, index: i32) -> Result<!, i64> {
+//     let res = bpf_xdp_adjust_head(ctx.ctx, index);
+//     if res != 0 {
+//         Err(res)
+//     } else {
+//         core::hint::unreachable_unchecked()
+//     }
+// }
+
 #[xdp(name="prepare_packet")]
 pub fn prepare_packet(ctx: XdpContext) -> u32 {
+    info!(&ctx, "[tail_call] prepare_packet");
+    let adjust_head_len: i32 = 128;
     unsafe {
+        // if let Err(_) = xdp_adjust_head(&ctx, -adjust_head_len) {
+        //     return xdp_action::XDP_PASS
+        // }
+        // if let Err(_) = xdp_adjust_head(&ctx, adjust_head_len) {
+        //     return xdp_action::XDP_PASS
+        // }
         // Jump to write_reply
         if let Err(_) = JUMP_TABLE.tail_call(&ctx, 2) {
+            return xdp_action::XDP_PASS
         }
     }
     xdp_action::XDP_DROP
 }
 
 #[xdp(name="write_reply")]
-pub fn write_reply(_ctx: XdpContext) -> u32 { xdp_action::XDP_DROP }
+pub fn write_reply(ctx: XdpContext) -> u32 {
+    info!(&ctx, "[tail_call] write_reply");
+    xdp_action::XDP_DROP
+}
 
 #[panic_handler]
 fn panic(_info: &core::panic::PanicInfo) -> ! {
